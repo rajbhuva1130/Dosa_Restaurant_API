@@ -1,3 +1,7 @@
+"""
+This module creates a SQLite database with four tables (customers, items, orders, and order_list)
+and populates the tables with data from a JSON file named 'example_orders.json'.
+"""
 import sqlite3
 import json
 
@@ -48,22 +52,21 @@ curr.execute(
     """
 )
 
-with open('example_orders.json') as file:
+with open('example_orders.json', encoding='utf-8') as file:
     order_list = json.load(file)
 
 orders = {}
 customers = {}
 items = {}
 
-for order in order_list: 
+for order in order_list:
     customers[order['phone']] = order["name"]
     for item in order["items"]:
         items[item["name"]] = item["price"]
-    
 
 for phone, name in customers.items():
     curr.execute("INSERT INTO customers (name, phone) VALUES (?, ?);", (name, phone))
-    
+
 for name, price in items.items():
     curr.execute("INSERT INTO items (name, price) VALUES (?, ?);", (name, price))
 
