@@ -15,6 +15,12 @@ class Customer(BaseModel):
     cust_id: int |  None = None
     name: str
     phone: str
+    
+class Order(BaseModel):
+    order_id: int | None = None
+    cust_id: int
+    notes: str | None = None
+    timestamp: int
 
 #Customer Endpoints
 @app.post("/customers/")
@@ -67,7 +73,7 @@ def delete_customer(cust_id : int):
     conn.commit()
     conn.close()
     if total_changes != 1:
-        raise HTTPException(status_code=400, detail=f"{total_changes} not found")
+        raise HTTPException(status_code=400, detail="id not found")
     return {"deleted": total_changes}
 
 #Items Endpoints
@@ -122,6 +128,77 @@ def delete_item(item_id: int):
     total_changes = conn.total_changes
     conn.commit()
     conn.close()
+    if total_changes != 1:
+        raise HTTPException(status_code=404, detail="id not found")
+    return {"deleted": total_changes}
+
+#Orders Endpoints
+@app.post("/orders/")
+def create_order(order: Order):
+    if  order.order_id != None:
+        raise HTTPException(status_code=400, detail="id cannot be set on POST request")
+    
+    conn = sqlite3.connect("db.sqlite")
+    curr = conn.cursor()
+    
+    # Check if customer exists
+    curr.execute("SELECT id FROM customers WHERE id=?", (order.cust_id,))
+    customer = curr.fetchone()
+    if customer is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    
+    curr.execute("INSERT INTO orders (cust_id, notes, timestamp) VALUES (?, ?, ?)", 
+                 (order.cust_id, order.notes, order.timestamp))
+    order.order_id = curr.lastrowid
+    conn.commit()
+    conn.close()
+    return order
+
+@app.get("/orders/{order_id}")
+def read_order(order_id: int):
+    conn = sqlite3.connect("db.sqlite")
+    curr = conn.cursor()
+    curr.execute("SELECT id, cust_id, notes, timestamp FROM orders WHERE id=?", (order_id,))
+    order_data = curr.fetchone()
+    conn.close()
+    if order_data != None:
+        order = Order(order_id=order_data[0], cust_id=order_data[1], notes=order_data[2], timestamp=order_data[3])
+        return order
+    else:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+@app.put("/orders/{order_id}")
+def update_order(order_id: int, order: Order):
+    if order.order_id != None and order.order_id != order_id:
+        raise HTTPException(status_code=400, detail="Order ID doesn't match URL")
+
+    conn = sqlite3.connect("db.sqlite")
+    curr = conn.cursor()
+
+    # Check if customer exists
+    curr.execute("SELECT id FROM customers WHERE id=?", (order.cust_id,))
+    customer = curr.fetchone()
+    if customer is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    order.order_id = order_id
+    curr.execute("UPDATE orders SET cust_id=?, notes=?, timestamp=? WHERE id=?",
+                 (order.cust_id, order.notes, order.timestamp, order_id))
+    total_changes = conn.total_changes
+    conn.commit()
+    conn.close()
     if total_changes == 0:
-        raise HTTPException(status_code=404, detail="Item not found")
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+@app.delete("/orders/{order_id}")
+def delete_order(order_id: int):
+    conn = sqlite3.connect("db.sqlite")
+    curr = conn.cursor()
+    curr.execute("DELETE FROM orders WHERE id=?", (order_id,))
+    total_changes = conn.total_changes
+    conn.commit()
+    conn.close()
+    if total_changes != 1:
+        raise HTTPException(status_code=404, detail="id not found")
     return {"deleted": total_changes}
