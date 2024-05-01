@@ -75,6 +75,9 @@ PUT /orders/{id}: Update an order by ID
 Order list
 ---------
 POST /order_list: Create a new order list
+
 GET /order_list/{id}: Retrieve an order list by ID
+
 DELETE /order_list/{id}: Delete an order list by ID
+
 PUT /order_list/{id}: Update an order list by ID
