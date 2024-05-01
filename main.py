@@ -14,9 +14,7 @@ class Item(BaseModel):
     """
     item_id: int | None = None
     name: str
-    # description: str | None = None
     price: float
-    # tax: float | None = None
 
 class Customer(BaseModel):
     """
@@ -34,6 +32,7 @@ class Order(BaseModel):
     cust_id: int
     notes: str | None = None
     timestamp: int
+    order_list: list[int]
 
 class OrderList(BaseModel):
     """
@@ -209,6 +208,14 @@ def create_order(order: Order):
     curr.execute("INSERT INTO orders (cust_id, notes, timestamp) VALUES (?, ?, ?)",
                  (order.cust_id, order.notes, order.timestamp))
     order.order_id = curr.lastrowid
+
+    for item_id in order.order_list:
+        curr.execute("SELECT * FROM items WHERE id = ?;", (item_id,))
+        if curr.fetchone() is None:
+            raise HTTPException(status_code=404,
+                                detail=f"Item not found with ID {item_id}")
+        curr.execute("INSERT INTO order_list (order_id, item_id) VALUES (?, ?);",
+                     (order.order_id, item_id))
     conn.commit()
     conn.close()
     return order
@@ -216,154 +223,98 @@ def create_order(order: Order):
 @app.get("/orders/{order_id}")
 def read_order(order_id: int):
     """
-    Retrieve an order by its ID, including customer details and timestamp.
+    Retrieve an order by its ID along with the details of the items in the order.
     """
     conn = sqlite3.connect("db.sqlite")
     curr = conn.cursor()
-    curr.execute("SELECT id, cust_id, notes, timestamp FROM orders WHERE id=?",
+
+    # Fetch the order details
+    curr.execute("SELECT cust_id, notes, timestamp FROM orders WHERE id=?",
                  (order_id,))
-    order_data = curr.fetchone()
+    order_details = curr.fetchone()
+    if not order_details:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    order = Order(
+        order_id=order_id, cust_id=order_details[0],
+        notes=order_details[1], timestamp=order_details[2], order_list=[]
+    )
+
+    # Fetch the list of items in the order
+    curr.execute("SELECT item_id FROM order_list WHERE order_id=?", (order_id,))
+    items = curr.fetchall()
+    item_list = []
+
+    # Fetch details for each item
+    for item in items:
+        curr.execute("SELECT id, name, price FROM items WHERE id=?", (item[0],))
+        item_detail = curr.fetchone()
+        if item_detail:
+            item_list.append(Item(item_id=item_detail[0],
+                                  name=item_detail[1], price=item_detail[2]))
     conn.close()
-    if order_data is not None:
-        order = Order(order_id=order_data[0], cust_id=order_data[1],
-                      notes=order_data[2], timestamp=order_data[3])
-        return order
-    raise HTTPException(status_code=404, detail="Order not found")
+
+    order.order_list = item_list
+    return order
 
 @app.put("/orders/{order_id}")
 def update_order(order_id: int, order: Order):
     """
-    Update an existing order's details including customer ID, notes, and timestamp.
+    Update an existing order including its notes, timestamp, and list of items.
     """
-    if order.order_id is not None and order.order_id is not order_id:
-        raise HTTPException(status_code=400, detail="Order ID doesn't match URL")
-
+    if order.order_id is not None and order.order_id != order_id:
+        raise HTTPException(status_code=400,
+                            detail="Order ID does not match URL")
     conn = sqlite3.connect("db.sqlite")
     curr = conn.cursor()
 
-    # Check if customer exists
-    curr.execute("SELECT id FROM customers WHERE id=?", (order.cust_id,))
-    customer = curr.fetchone()
-    if customer is None:
-        raise HTTPException(status_code=404, detail="Customer not found")
+    # Check if the order exists
+    curr.execute("SELECT id FROM orders WHERE id=?", (order_id,))
+    if curr.fetchone() is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Order not found")
 
-    order.order_id = order_id
-    curr.execute("UPDATE orders SET cust_id=?, notes=?, timestamp=? WHERE id=?",
-                 (order.cust_id, order.notes, order.timestamp, order_id))
-    total_changes = conn.total_changes
+    curr.execute("UPDATE orders SET notes=?, timestamp=? WHERE id=?",
+                 (order.notes, order.timestamp, order_id))
+
+    # Update the list of items in the order
+    curr.execute("DELETE FROM order_list WHERE order_id=?", (order_id,))
+
+    for item_id in order.order_list:
+        curr.execute("SELECT id FROM items WHERE id=?", (item_id,))
+        if curr.fetchone() is None:
+            conn.close()
+            raise HTTPException(status_code=404,
+                                detail=f"Item not found with ID {item_id}")
+        curr.execute("INSERT INTO order_list (order_id, item_id) VALUES (?, ?)",
+                     (order_id, item_id))
     conn.commit()
     conn.close()
-    if total_changes == 0:
-        raise HTTPException(status_code=404, detail="Order not found")
+
     return order
 
 @app.delete("/orders/{order_id}")
 def delete_order(order_id: int):
     """
-    Delete an order by its ID.
+    Delete an existing order and its associated items in the order_list by order ID.
     """
     conn = sqlite3.connect("db.sqlite")
     curr = conn.cursor()
+
+    curr.execute("SELECT id FROM orders WHERE id=?", (order_id,))
+    if curr.fetchone() is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    curr.execute("DELETE FROM order_list WHERE order_id=?", (order_id,))
+
     curr.execute("DELETE FROM orders WHERE id=?", (order_id,))
     total_changes = conn.total_changes
     conn.commit()
     conn.close()
-    if total_changes != 1:
-        raise HTTPException(status_code=404, detail="id not found")
-    return {"deleted": total_changes}
 
-# Order List Endpoints
-@app.post("/order_list/")
-def create_order_list(order_list: OrderList):
-    """
-    Create a new order list entry linking an order with an item.
-    """
-    if  order_list.order_list_id is not None:
-        raise HTTPException(status_code=400, detail="id cannot be set on POST request")
-
-    conn = sqlite3.connect("db.sqlite")
-    curr = conn.cursor()
-
-    # Check if order exists
-    curr.execute("SELECT id FROM orders WHERE id=?", (order_list.order_id,))
-    order = curr.fetchone()
-    if order is None:
-        raise HTTPException(status_code=404, detail="order not found")
-
-    # Check if item exists
-    curr.execute("SELECT id FROM items WHERE id=?", (order_list.item_id,))
-    item = curr.fetchone()
-    if item is None:
-        raise HTTPException(status_code=404, detail="item not found")
-
-    curr.execute("INSERT INTO order_list (order_id, item_id) VALUES (?, ?)",
-                 (order_list.order_id, order_list.item_id))
-    order_list.order_list_id = curr.lastrowid
-    conn.commit()
-    conn.close()
-    return order_list
-
-@app.get("/order_list/{order_list_id}")
-def read_order_list(order_list_id: int):
-    """
-    Retrieve an order list entry by its ID, showing linked order and item IDs.
-    """
-    conn = sqlite3.connect("db.sqlite")
-    curr = conn.cursor()
-    curr.execute("SELECT id, order_id, item_id FROM order_list WHERE id=?",
-                 (order_list_id,))
-    order_list_data = curr.fetchone()
-    conn.close()
-    if order_list_data is not None:
-        order_list = OrderList(order_list_id=order_list_data[0],
-                                order_id=order_list_data[1], item_id=order_list_data[2])
-        return order_list
-    raise HTTPException(status_code=404, detail="id not found")
-
-@app.put("/order_list/{order_list_id}")
-def update_order_list(order_list_id: int, order_list: OrderList):
-    """
-    Update an existing order list entry, linking new or updated order and item IDs.
-    """
-    if order_list.order_list_id is not None and order_list.order_list_id is not order_list_id:
-        raise HTTPException(status_code=400, detail="Order_List ID doesn't match URL")
-
-    conn = sqlite3.connect("db.sqlite")
-    curr = conn.cursor()
-
-    # Check if order exists
-    curr.execute("SELECT id FROM orders WHERE id=?", (order_list.order_id,))
-    order = curr.fetchone()
-    if order is None:
-        raise HTTPException(status_code=404, detail="order not found")
-
-    # Check if item exists
-    curr.execute("SELECT id FROM items WHERE id=?", (order_list.item_id,))
-    item = curr.fetchone()
-    if item is None:
-        raise HTTPException(status_code=404, detail="item not found")
-
-    order_list.order_list_id = order_list_id
-    curr.execute("UPDATE order_list SET order_id=?, item_id=? WHERE id=?",
-                 (order_list.order_id, order_list.item_id, order_list_id))
-    total_changes = conn.total_changes
-    conn.commit()
-    conn.close()
     if total_changes == 0:
-        raise HTTPException(status_code=404, detail="Order_list id not found")
-    return order_list
+        raise HTTPException(status_code=404, detail="Order not found")
 
-@app.delete("/order_list/{order_list_id}")
-def delete_order_list(order_list_id: int):
-    """
-    Delete an order list entry by its ID.
-    """
-    conn = sqlite3.connect("db.sqlite")
-    curr = conn.cursor()
-    curr.execute("DELETE from order_list where id=?", (order_list_id,))
-    total_changes = conn.total_changes
-    conn.commit()
-    conn.close()
-    if total_changes != 1:
-        raise HTTPException(status_code=404, detail="id not found")
     return {"deleted": total_changes}
