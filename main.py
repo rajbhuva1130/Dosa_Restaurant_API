@@ -266,6 +266,8 @@ def update_order(order_id: int, order: Order):
     if order.order_id is not None and order.order_id != order_id:
         raise HTTPException(status_code=400,
                             detail="Order ID does not match URL")
+
+    order.order_id =  order_id
     conn = sqlite3.connect("db.sqlite")
     curr = conn.cursor()
 
