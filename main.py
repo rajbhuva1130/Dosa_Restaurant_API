@@ -267,7 +267,7 @@ def update_order(order_id: int, order: Order):
         raise HTTPException(status_code=400,
                             detail="Order ID does not match URL")
 
-    order.order_id =  order_id
+    order.order_id = order_id
     conn = sqlite3.connect("db.sqlite")
     curr = conn.cursor()
 
